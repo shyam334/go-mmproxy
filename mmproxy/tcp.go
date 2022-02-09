@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package mmproxy
 
 import (
 	"context"
@@ -17,17 +17,18 @@ func tcpCopyData(dst net.Conn, src net.Conn, ch chan<- error) {
 	ch <- err
 }
 
-func tcpHandleConnection(conn net.Conn, logger *zap.Logger) {
+func tcpHandleConnection(conn net.Conn, logger *zap.Logger, verbose int, targetAddr4 string, targetAddr6 string,
+	allowedSubnets []*net.IPNet, protocol string, mark int) {
 	defer conn.Close()
 	logger = logger.With(zap.String("remoteAddr", conn.RemoteAddr().String()),
 		zap.String("localAddr", conn.LocalAddr().String()))
 
-	if !CheckOriginAllowed(conn.RemoteAddr().(*net.TCPAddr).IP) {
+	if !CheckOriginAllowed(conn.RemoteAddr().(*net.TCPAddr).IP, allowedSubnets) {
 		logger.Debug("connection origin not in allowed subnets", zap.Bool("dropConnection", true))
 		return
 	}
 
-	if Opts.Verbose > 1 {
+	if verbose > 1 {
 		logger.Debug("new connection")
 	}
 
@@ -50,13 +51,13 @@ func tcpHandleConnection(conn net.Conn, logger *zap.Logger) {
 		return
 	}
 
-	targetAddr := Opts.TargetAddr6
+	targetAddr := targetAddr6
 	if saddr == nil {
 		if AddrVersion(conn.RemoteAddr()) == 4 {
-			targetAddr = Opts.TargetAddr4
+			targetAddr = targetAddr4
 		}
 	} else if AddrVersion(saddr) == 4 {
-		targetAddr = Opts.TargetAddr4
+		targetAddr = targetAddr4
 	}
 
 	clientAddr := "UNKNOWN"
@@ -64,13 +65,13 @@ func tcpHandleConnection(conn net.Conn, logger *zap.Logger) {
 		clientAddr = saddr.String()
 	}
 	logger = logger.With(zap.String("clientAddr", clientAddr), zap.String("targetAddr", targetAddr))
-	if Opts.Verbose > 1 {
+	if verbose > 1 {
 		logger.Debug("successfully parsed PROXY header")
 	}
 
 	dialer := net.Dialer{LocalAddr: saddr}
 	if saddr != nil {
-		dialer.Control = DialUpstreamControl(saddr.(*net.TCPAddr).Port)
+		dialer.Control = DialUpstreamControl(saddr.(*net.TCPAddr).Port, protocol, mark)
 	}
 	upstreamConn, err := dialer.Dial("tcp", targetAddr)
 	if err != nil {
@@ -79,19 +80,19 @@ func tcpHandleConnection(conn net.Conn, logger *zap.Logger) {
 	}
 
 	defer upstreamConn.Close()
-	if Opts.Verbose > 1 {
+	if verbose > 1 {
 		logger.Debug("successfully established upstream connection")
 	}
 
 	if err := conn.(*net.TCPConn).SetNoDelay(true); err != nil {
 		logger.Debug("failed to set nodelay on downstream connection", zap.Error(err), zap.Bool("dropConnection", true))
-	} else if Opts.Verbose > 1 {
+	} else if verbose > 1 {
 		logger.Debug("successfully set NoDelay on downstream connection")
 	}
 
 	if err := upstreamConn.(*net.TCPConn).SetNoDelay(true); err != nil {
 		logger.Debug("failed to set nodelay on upstream connection", zap.Error(err), zap.Bool("dropConnection", true))
-	} else if Opts.Verbose > 1 {
+	} else if verbose > 1 {
 		logger.Debug("successfully set NoDelay on upstream connection")
 	}
 
@@ -115,14 +116,15 @@ func tcpHandleConnection(conn net.Conn, logger *zap.Logger) {
 	err = <-outErr
 	if err != nil {
 		logger.Debug("connection broken", zap.Error(err), zap.Bool("dropConnection", true))
-	} else if Opts.Verbose > 1 {
+	} else if verbose > 1 {
 		logger.Debug("connection closing")
 	}
 }
 
-func TCPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<- error) {
+func TCPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<- error, verbose int,
+	listenAddr string, targetAddr4 string, targetAddr6 string, allowedSubnets []*net.IPNet, protocol string, mark int) {
 	ctx := context.Background()
-	ln, err := listenConfig.Listen(ctx, "tcp", Opts.ListenAddr)
+	ln, err := listenConfig.Listen(ctx, "tcp", listenAddr)
 	if err != nil {
 		logger.Error("failed to bind listener", zap.Error(err))
 		errors <- err
@@ -139,6 +141,6 @@ func TCPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<-
 			return
 		}
 
-		go tcpHandleConnection(conn, logger)
+		go tcpHandleConnection(conn, logger, verbose, targetAddr4, targetAddr6, allowedSubnets, protocol, mark)
 	}
 }

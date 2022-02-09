@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package mmproxy
 
 import (
 	"context"
@@ -22,10 +22,10 @@ type udpConnection struct {
 	logger         *zap.Logger
 }
 
-func udpCloseAfterInactivity(conn *udpConnection, socketClosures chan<- string) {
+func udpCloseAfterInactivity(conn *udpConnection, socketClosures chan<- string, UDPCloseAfterSec time.Duration) {
 	for {
 		lastActivity := atomic.LoadInt64(conn.lastActivity)
-		<-time.After(Opts.UDPCloseAfter)
+		<-time.After(UDPCloseAfterSec)
 		if atomic.LoadInt64(conn.lastActivity) == lastActivity {
 			break
 		}
@@ -82,7 +82,8 @@ func udpCopyFromUpstream(downstream net.PacketConn, conn *udpConnection) {
 }
 
 func udpGetSocketFromMap(downstream net.PacketConn, downstreamAddr, saddr net.Addr, logger *zap.Logger,
-	connMap map[string]*udpConnection, socketClosures chan<- string) (*udpConnection, error) {
+	connMap map[string]*udpConnection, socketClosures chan<- string, verbose int, targetAddr4 string, targetAddr6 string,
+	UDPCloseAfterSec time.Duration, protocol string, mark int) (*udpConnection, error) {
 	connKey := ""
 	if saddr != nil {
 		connKey = saddr.String()
@@ -92,19 +93,19 @@ func udpGetSocketFromMap(downstream net.PacketConn, downstreamAddr, saddr net.Ad
 		return conn, nil
 	}
 
-	targetAddr := Opts.TargetAddr6
+	targetAddr := targetAddr6
 	if AddrVersion(downstreamAddr) == 4 {
-		targetAddr = Opts.TargetAddr4
+		targetAddr = targetAddr4
 	}
 
 	logger = logger.With(zap.String("downstreamAddr", downstreamAddr.String()), zap.String("targetAddr", targetAddr))
 	dialer := net.Dialer{LocalAddr: saddr}
 	if saddr != nil {
 		logger = logger.With(zap.String("clientAddr", saddr.String()))
-		dialer.Control = DialUpstreamControl(saddr.(*net.UDPAddr).Port)
+		dialer.Control = DialUpstreamControl(saddr.(*net.UDPAddr).Port, protocol, mark)
 	}
 
-	if Opts.Verbose > 1 {
+	if verbose > 1 {
 		logger.Debug("new connection")
 	}
 
@@ -123,15 +124,17 @@ func udpGetSocketFromMap(downstream net.PacketConn, downstreamAddr, saddr net.Ad
 	}
 
 	go udpCopyFromUpstream(downstream, udpConn)
-	go udpCloseAfterInactivity(udpConn, socketClosures)
+	go udpCloseAfterInactivity(udpConn, socketClosures, UDPCloseAfterSec)
 
 	connMap[connKey] = udpConn
 	return udpConn, nil
 }
 
-func UDPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<- error) {
+func UDPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<- error,
+	verbose int, listenAddr string, targetAddr4 string, targetAddr6 string,
+	allowedSubnets []*net.IPNet, protocol string, mark int, UDPCloseAfterSec time.Duration) {
 	ctx := context.Background()
-	ln, err := listenConfig.ListenPacket(ctx, "udp", Opts.ListenAddr)
+	ln, err := listenConfig.ListenPacket(ctx, "udp", listenAddr)
 	if err != nil {
 		logger.Error("failed to bind listener", zap.Error(err))
 		errors <- err
@@ -153,7 +156,7 @@ func UDPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<-
 			continue
 		}
 
-		if !CheckOriginAllowed(remoteAddr.(*net.UDPAddr).IP) {
+		if !CheckOriginAllowed(remoteAddr.(*net.UDPAddr).IP, allowedSubnets) {
 			logger.Debug("packet origin not in allowed subnets", zap.String("remoteAddr", remoteAddr.String()))
 			continue
 		}
@@ -177,7 +180,8 @@ func UDPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<-
 			}
 		}
 
-		conn, err := udpGetSocketFromMap(ln, remoteAddr, saddr, logger, connectionMap, socketClosures)
+		conn, err := udpGetSocketFromMap(ln, remoteAddr, saddr, logger, connectionMap, socketClosures,
+			verbose, targetAddr4, targetAddr6, UDPCloseAfterSec, protocol, mark)
 		if err != nil {
 			continue
 		}

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package mmproxy
 
 import (
 	"fmt"
@@ -18,12 +18,12 @@ const (
 	UDP
 )
 
-func CheckOriginAllowed(remoteIP net.IP) bool {
-	if len(Opts.AllowedSubnets) == 0 {
+func CheckOriginAllowed(remoteIP net.IP, allowedSubnets []*net.IPNet) bool {
+	if len(allowedSubnets) == 0 {
 		return true
 	}
 
-	for _, ipNet := range Opts.AllowedSubnets {
+	for _, ipNet := range allowedSubnets {
 		if ipNet.Contains(remoteIP) {
 			return true
 		}
@@ -31,11 +31,11 @@ func CheckOriginAllowed(remoteIP net.IP) bool {
 	return false
 }
 
-func DialUpstreamControl(sport int) func(string, string, syscall.RawConn) error {
+func DialUpstreamControl(sport int, protocol string, mark int) func(string, string, syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
 		var syscallErr error
 		err := c.Control(func(fd uintptr) {
-			if Opts.Protocol == "tcp" {
+			if protocol == "tcp" {
 				syscallErr = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_SYNCNT, 2)
 				if syscallErr != nil {
 					syscallErr = fmt.Errorf("setsockopt(IPPROTO_TCP, TCP_SYNCTNT, 2): %s", syscallErr.Error())
@@ -60,10 +60,10 @@ func DialUpstreamControl(sport int) func(string, string, syscall.RawConn) error 
 				syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, ipBindAddressNoPort, 1)
 			}
 
-			if Opts.Mark != 0 {
-				syscallErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, Opts.Mark)
+			if mark != 0 {
+				syscallErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, mark)
 				if syscallErr != nil {
-					syscallErr = fmt.Errorf("setsockopt(SOL_SOCK, SO_MARK, %d): %s", Opts.Mark, syscallErr.Error())
+					syscallErr = fmt.Errorf("setsockopt(SOL_SOCK, SO_MARK, %d): %s", mark, syscallErr.Error())
 					return
 				}
 			}

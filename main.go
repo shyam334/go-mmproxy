@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	mmproxy "github.com/path-network/go-mmproxy/mmproxy"
 	"go.uber.org/zap"
 )
 
@@ -66,9 +67,9 @@ func listen(listenerNum int, errors chan<- error) {
 	}
 
 	if Opts.Protocol == "tcp" {
-		TCPListen(&listenConfig, logger, errors)
+		mmproxy.TCPListen(&listenConfig, logger, errors, Opts.Verbose, Opts.ListenAddr, Opts.TargetAddr4, Opts.TargetAddr6, Opts.AllowedSubnets, Opts.Protocol, Opts.Mark)
 	} else {
-		UDPListen(&listenConfig, logger, errors)
+		mmproxy.UDPListen(&listenConfig, logger, errors, Opts.Verbose, Opts.ListenAddr, Opts.TargetAddr4, Opts.TargetAddr6, Opts.AllowedSubnets, Opts.Protocol, Opts.Mark, Opts.UDPCloseAfter)
 	}
 }
 
