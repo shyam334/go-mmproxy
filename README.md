@@ -1,3 +1,6 @@
+Stripped down version of go-mmproxy to use the proxyproto methods as a lib.
+
+---
 # go-mmproxy
 
 This is a Go reimplementation of [mmproxy](https://github.com/cloudflare/mmproxy), created to improve on mmproxy's runtime stability while providing potentially greater performance in terms of connection and packet throughput.
