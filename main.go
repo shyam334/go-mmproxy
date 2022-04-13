@@ -13,25 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shyam334/go-mmproxy/proxyproto"
 	"go.uber.org/zap"
 )
 
-type options struct {
-	Protocol           string
-	ListenAddr         string
-	TargetAddr4        string
-	TargetAddr6        string
-	Mark               int
-	Verbose            int
-	allowedSubnetsPath string
-	AllowedSubnets     []*net.IPNet
-	Listeners          int
-	Logger             *zap.Logger
-	udpCloseAfter      int
-	UDPCloseAfter      time.Duration
-}
-
-var Opts options
+var Opts proxyproto.Options
 
 func init() {
 	flag.StringVar(&Opts.Protocol, "p", "tcp", "Protocol that will be proxied: tcp, udp")
@@ -42,11 +28,11 @@ func init() {
 	flag.IntVar(&Opts.Verbose, "v", 0, `0 - no logging of individual connections
 1 - log errors occurring in individual connections
 2 - log all state changes of individual connections`)
-	flag.StringVar(&Opts.allowedSubnetsPath, "allowed-subnets", "",
+	flag.StringVar(&Opts.AllowedSubnetsPath, "allowed-subnets", "",
 		"Path to a file that contains allowed subnets of the proxy servers")
 	flag.IntVar(&Opts.Listeners, "listeners", 1,
 		"Number of listener sockets that will be opened for the listen address (Linux 3.9+)")
-	flag.IntVar(&Opts.udpCloseAfter, "close-after", 60, "Number of seconds after which UDP socket will be cleaned up")
+	flag.IntVar(&Opts.UdpCloseAfterSec, "close-after", 60, "Number of seconds after which UDP socket will be cleaned up")
 }
 
 func listen(listenerNum int, errors chan<- error) {
@@ -66,14 +52,14 @@ func listen(listenerNum int, errors chan<- error) {
 	}
 
 	if Opts.Protocol == "tcp" {
-		TCPListen(&listenConfig, logger, errors)
+		proxyproto.TCPListen(&listenConfig, logger, errors, Opts)
 	} else {
-		UDPListen(&listenConfig, logger, errors)
+		proxyproto.UDPListen(&listenConfig, logger, errors, Opts)
 	}
 }
 
 func loadAllowedSubnets() error {
-	file, err := os.Open(Opts.allowedSubnetsPath)
+	file, err := os.Open(Opts.AllowedSubnetsPath)
 	if err != nil {
 		return err
 	}
@@ -113,10 +99,10 @@ func main() {
 	}
 	defer Opts.Logger.Sync()
 
-	if Opts.allowedSubnetsPath != "" {
+	if Opts.AllowedSubnetsPath != "" {
 		if err := loadAllowedSubnets(); err != nil {
 			Opts.Logger.Fatal("failed to load allowed subnets file",
-				zap.String("path", Opts.allowedSubnetsPath), zap.Error(err))
+				zap.String("path", Opts.AllowedSubnetsPath), zap.Error(err))
 		}
 	}
 
@@ -136,10 +122,10 @@ func main() {
 		Opts.Logger.Fatal("--listeners has to be >= 1")
 	}
 
-	if Opts.udpCloseAfter < 0 {
-		Opts.Logger.Fatal("--close-after has to be >= 0", zap.Int("close-after", Opts.udpCloseAfter))
+	if Opts.UdpCloseAfterSec < 0 {
+		Opts.Logger.Fatal("--close-after has to be >= 0", zap.Int("close-after", Opts.UdpCloseAfterSec))
 	}
-	Opts.UDPCloseAfter = time.Duration(Opts.udpCloseAfter) * time.Second
+	Opts.UDPCloseAfter = time.Duration(Opts.UdpCloseAfterSec) * time.Second
 
 	listenErrors := make(chan error, Opts.Listeners)
 	for i := 0; i < Opts.Listeners; i++ {

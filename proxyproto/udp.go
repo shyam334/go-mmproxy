@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package proxyproto
 
 import (
 	"context"
@@ -22,7 +22,7 @@ type udpConnection struct {
 	logger         *zap.Logger
 }
 
-func udpCloseAfterInactivity(conn *udpConnection, socketClosures chan<- string) {
+func udpCloseAfterInactivity(conn *udpConnection, socketClosures chan<- string, Opts Options) {
 	for {
 		lastActivity := atomic.LoadInt64(conn.lastActivity)
 		<-time.After(Opts.UDPCloseAfter)
@@ -82,7 +82,7 @@ func udpCopyFromUpstream(downstream net.PacketConn, conn *udpConnection) {
 }
 
 func udpGetSocketFromMap(downstream net.PacketConn, downstreamAddr, saddr net.Addr, logger *zap.Logger,
-	connMap map[string]*udpConnection, socketClosures chan<- string) (*udpConnection, error) {
+	connMap map[string]*udpConnection, socketClosures chan<- string, Opts Options) (*udpConnection, error) {
 	connKey := ""
 	if saddr != nil {
 		connKey = saddr.String()
@@ -101,7 +101,7 @@ func udpGetSocketFromMap(downstream net.PacketConn, downstreamAddr, saddr net.Ad
 	dialer := net.Dialer{LocalAddr: saddr}
 	if saddr != nil {
 		logger = logger.With(zap.String("clientAddr", saddr.String()))
-		dialer.Control = DialUpstreamControl(saddr.(*net.UDPAddr).Port)
+		dialer.Control = DialUpstreamControl(saddr.(*net.UDPAddr).Port, Opts)
 	}
 
 	if Opts.Verbose > 1 {
@@ -123,13 +123,13 @@ func udpGetSocketFromMap(downstream net.PacketConn, downstreamAddr, saddr net.Ad
 	}
 
 	go udpCopyFromUpstream(downstream, udpConn)
-	go udpCloseAfterInactivity(udpConn, socketClosures)
+	go udpCloseAfterInactivity(udpConn, socketClosures, Opts)
 
 	connMap[connKey] = udpConn
 	return udpConn, nil
 }
 
-func UDPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<- error) {
+func UDPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<- error, Opts Options) {
 	ctx := context.Background()
 	ln, err := listenConfig.ListenPacket(ctx, "udp", Opts.ListenAddr)
 	if err != nil {
@@ -153,7 +153,7 @@ func UDPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<-
 			continue
 		}
 
-		if !CheckOriginAllowed(remoteAddr.(*net.UDPAddr).IP) {
+		if !CheckOriginAllowed(remoteAddr.(*net.UDPAddr).IP, Opts) {
 			logger.Debug("packet origin not in allowed subnets", zap.String("remoteAddr", remoteAddr.String()))
 			continue
 		}
@@ -177,7 +177,7 @@ func UDPListen(listenConfig *net.ListenConfig, logger *zap.Logger, errors chan<-
 			}
 		}
 
-		conn, err := udpGetSocketFromMap(ln, remoteAddr, saddr, logger, connectionMap, socketClosures)
+		conn, err := udpGetSocketFromMap(ln, remoteAddr, saddr, logger, connectionMap, socketClosures, Opts)
 		if err != nil {
 			continue
 		}
